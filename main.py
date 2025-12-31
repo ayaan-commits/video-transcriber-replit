@@ -2,17 +2,18 @@ import os
 import uuid
 import tempfile
 import shutil
+import requests
 from flask import Flask, request, jsonify, render_template_string
-
-import whisper
 import yt_dlp
 
 app = Flask(__name__)
 
-# Load Whisper model at startup
-print("Loading Whisper model...")
-model = whisper.load_model("base")
-print("Whisper model loaded!")
+# HuggingFace API for Whisper (free tier)
+HF_API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+
+print("Video Transcriber started!")
+print("Using HuggingFace Whisper API")
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -71,8 +72,6 @@ HTML_TEMPLATE = '''
                 <div class="bg-white/5 px-6 py-4 border-b border-white/10 flex items-center justify-between flex-wrap gap-4">
                     <div class="flex items-center gap-4">
                         <span class="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-sm font-medium">Success</span>
-                        <span id="langInfo" class="text-gray-400 text-sm"></span>
-                        <span id="durationInfo" class="text-gray-400 text-sm"></span>
                     </div>
                     <button onclick="copyTranscript()" class="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-all">
                         <span id="copyText">Copy to Clipboard</span>
@@ -88,7 +87,7 @@ HTML_TEMPLATE = '''
         </div>
 
         <footer class="text-center mt-16 text-gray-500 text-sm">
-            <p>Powered by OpenAI Whisper & yt-dlp</p>
+            <p>Powered by HuggingFace Whisper API & yt-dlp</p>
         </footer>
     </div>
 
@@ -101,8 +100,6 @@ HTML_TEMPLATE = '''
         const errorText = document.getElementById('errorText');
         const result = document.getElementById('result');
         const transcript = document.getElementById('transcript');
-        const langInfo = document.getElementById('langInfo');
-        const durationInfo = document.getElementById('durationInfo');
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -125,8 +122,6 @@ HTML_TEMPLATE = '''
 
                 if (data.success) {
                     transcript.textContent = data.transcript;
-                    langInfo.textContent = data.language ? `Language: ${data.language.toUpperCase()}` : '';
-                    durationInfo.textContent = data.duration ? `Duration: ${Math.floor(data.duration/60)}:${String(Math.floor(data.duration%60)).padStart(2,'0')}` : '';
                     result.classList.remove('hidden');
                 } else {
                     errorText.textContent = data.error || 'Transcription failed';
@@ -152,6 +147,29 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+def transcribe_audio_hf(audio_path):
+    """Transcribe audio using HuggingFace Inference API"""
+    if not HF_TOKEN:
+        return None, "HF_TOKEN environment variable not set"
+
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+    with open(audio_path, "rb") as f:
+        audio_data = f.read()
+
+    response = requests.post(HF_API_URL, headers=headers, data=audio_data)
+
+    if response.status_code == 200:
+        result = response.json()
+        if isinstance(result, dict) and "text" in result:
+            return result["text"], None
+        elif isinstance(result, str):
+            return result, None
+        else:
+            return str(result), None
+    else:
+        return None, f"API Error: {response.status_code} - {response.text}"
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -163,6 +181,9 @@ def transcribe():
 
     if not url:
         return jsonify({'success': False, 'error': 'Please provide a URL'})
+
+    if not HF_TOKEN:
+        return jsonify({'success': False, 'error': 'Server not configured. HF_TOKEN missing.'})
 
     temp_dir = None
     try:
@@ -197,18 +218,14 @@ def transcribe():
         if not audio_file:
             return jsonify({'success': False, 'error': 'Audio file not found'})
 
-        result = model.transcribe(audio_file)
+        transcript, error = transcribe_audio_hf(audio_file)
 
-        transcript = result.get("text", "").strip()
-        language = result.get("language", "unknown")
-        segments = result.get("segments", [])
-        duration = segments[-1]["end"] if segments else 0
+        if error:
+            return jsonify({'success': False, 'error': error})
 
         return jsonify({
             'success': True,
-            'transcript': transcript,
-            'language': language,
-            'duration': round(duration, 2)
+            'transcript': transcript.strip() if transcript else ""
         })
 
     except Exception as e:
