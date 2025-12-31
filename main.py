@@ -9,7 +9,7 @@ import yt_dlp
 app = Flask(__name__)
 
 # HuggingFace API for Whisper (free tier)
-HF_API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 print("Video Transcriber started!")
